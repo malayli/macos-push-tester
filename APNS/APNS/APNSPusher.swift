@@ -109,43 +109,78 @@ public final class APNSPusher: NSObject, APNSPushable {
             }
         }
         
-        session?.dataTask(with: request, completionHandler: { (data, response, error) in
-            guard let r = response as? HTTPURLResponse else {
-                DispatchQueue.main.async {
-                    completion(.failure(NSError(domain: "com.pusher.APNSPusher", code: 0, userInfo: [NSLocalizedDescriptionKey: "Unknown error"])))
+        if #available(OSX 10.15, *) {
+            let webSocketTask = session?.webSocketTask(with: request)
+            webSocketTask?.receive { result in
+                switch result {
+                case .failure(let error):
+                    completion(.failure(error))
+                    
+                case .success(let message):
+                    switch message {
+                    case .string(let text):
+                        DispatchQueue.main.async {
+                            completion(.failure(NSError(domain: text, code: 0, userInfo: nil)))
+                        }
+                        
+                    case .data(let data):
+                        if let dict = try? JSONSerialization.jsonObject(with: data, options: JSONSerialization.ReadingOptions.allowFragments),
+                            let json = dict as? [String: Any],
+                            let reason = json["reason"] as? String {
+                            DispatchQueue.main.async {
+                                completion(.success(HTTPURLResponse.localizedString(forStatusCode: 200)))
+                            }
+                        }
+                        
+                    @unknown default:
+                        DispatchQueue.main.async {
+                            completion(.failure(NSError(domain: "unknown error", code: 0, userInfo: nil)))
+                        }
+                    }
                 }
-                return
             }
             
-            if let error = error {
-                DispatchQueue.main.async {
-                    completion(.failure(error as NSError))
-                }
-                return
-            }
+            webSocketTask?.resume()
             
-            switch r.statusCode {
-            case 200:
-                DispatchQueue.main.async {
-                    completion(.success(HTTPURLResponse.localizedString(forStatusCode: r.statusCode)))
+        } else {
+            session?.dataTask(with: request, completionHandler: { (data, response, error) in
+                guard let r = response as? HTTPURLResponse else {
+                    DispatchQueue.main.async {
+                        completion(.failure(NSError(domain: "com.pusher.APNSPusher", code: 0, userInfo: [NSLocalizedDescriptionKey: "Unknown error"])))
+                    }
+                    return
                 }
                 
-            default:
-                if let data = data,
-                    let dict = try? JSONSerialization.jsonObject(with: data, options: JSONSerialization.ReadingOptions.allowFragments),
-                    let json = dict as? [String: Any],
-                    let reason = json["reason"] as? String {
+                if let error = error {
                     DispatchQueue.main.async {
-                        completion(.failure(NSError(domain: "com.pusher.APNSPusher", code: r.statusCode, userInfo: [NSLocalizedDescriptionKey: reason])))
+                        completion(.failure(error as NSError))
+                    }
+                    return
+                }
+                
+                switch r.statusCode {
+                case 200:
+                    DispatchQueue.main.async {
+                        completion(.success(HTTPURLResponse.localizedString(forStatusCode: r.statusCode)))
                     }
                     
-                } else {
-                    DispatchQueue.main.async {
-                        completion(.failure(NSError(domain: "com.pusher.APNSPusher", code: r.statusCode, userInfo: [NSLocalizedDescriptionKey: HTTPURLResponse.localizedString(forStatusCode: r.statusCode)])))
+                default:
+                    if let data = data,
+                        let dict = try? JSONSerialization.jsonObject(with: data, options: JSONSerialization.ReadingOptions.allowFragments),
+                        let json = dict as? [String: Any],
+                        let reason = json["reason"] as? String {
+                        DispatchQueue.main.async {
+                            completion(.failure(NSError(domain: "com.pusher.APNSPusher", code: r.statusCode, userInfo: [NSLocalizedDescriptionKey: reason])))
+                        }
+                        
+                    } else {
+                        DispatchQueue.main.async {
+                            completion(.failure(NSError(domain: "com.pusher.APNSPusher", code: r.statusCode, userInfo: [NSLocalizedDescriptionKey: HTTPURLResponse.localizedString(forStatusCode: r.statusCode)])))
+                        }
                     }
                 }
-            }
-        }).resume()
+            }).resume()
+        }
     }
 }
 
